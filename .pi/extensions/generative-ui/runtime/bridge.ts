@@ -1,5 +1,5 @@
 import type { HostToPage, PageToHost } from "../protocol.js";
-import { isHostToPage } from "../protocol.js";
+import { isHostToPage, isPageToHost } from "../protocol.js";
 
 /**
  * The bridge owns both directions of the host↔page channel.
@@ -44,13 +44,33 @@ export function on<T extends HostToPage["type"]>(type: T, fn: Handler<T>): () =>
   return () => { bucket!.delete(wrapped); };
 }
 
+// The original native send, captured before we wrap it.
+let nativeSend: ((data: unknown) => void) | null = null;
+
 export function send(msg: PageToHost): void {
-  const g = window.glimpse;
-  if (!g || typeof g.send !== "function") {
-    console.warn("[glimpse-ui] window.glimpse.send unavailable");
+  if (!nativeSend) {
+    console.warn("[glimpse-ui] native send unavailable");
     return;
   }
-  g.send(msg);
+  nativeSend(msg);
+}
+
+/**
+ * Wrap window.glimpse.send so that user code calling glimpse.send({...})
+ * (without our envelope) gets wrapped as a `user-message`. Anything that
+ * already conforms to PageToHost passes through.
+ */
+function wrapGlimpse(): void {
+  const g = window.glimpse;
+  if (!g || typeof g.send !== "function") {
+    console.warn("[glimpse-ui] window.glimpse.send unavailable; rpc disabled");
+    return;
+  }
+  nativeSend = g.send.bind(g);
+  g.send = (data: unknown) => {
+    if (isPageToHost(data)) nativeSend!(data);
+    else nativeSend!({ type: "user-message", data } satisfies PageToHost);
+  };
 }
 
 // ── RPC (page → host) ────────────────────────────────────────────────────
@@ -78,4 +98,5 @@ export function rpc<T = unknown>(method: string, params: unknown = null): Promis
 // Install the deliver hook on window so the host can call into us.
 export function install(): void {
   window.__glimpseUI = { deliver };
+  wrapGlimpse();
 }
