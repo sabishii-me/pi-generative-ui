@@ -1,0 +1,10 @@
+# Force LF for all text files so the runtime bundle hashes consistently
+# across Windows / Linux / macOS CI runners.
+* text=auto eol=lf
+
+# Binary files — never normalize
+*.png binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.pdf binary

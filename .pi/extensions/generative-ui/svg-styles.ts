@@ -7,7 +7,7 @@ export const SVG_STYLES = `
 :root {
   --p: #e0e0e0;
   --s: #a0a0a0;
-  --t: #707070;
+  --t: #b4b2a9;
   --bg2: #2a2a2a;
   --b: #404040;
   --color-text-primary: #e0e0e0;
@@ -62,59 +62,63 @@ svg .leader { stroke: var(--t); stroke-width: 0.5; stroke-dasharray: 4 3; fill: 
    Applied via direct-child selectors (>) as documented in guidelines.
    Also supports applying c-* directly on shape elements. */
 
-/* Purple: 800=#3C3489, 200=#AFA9EC, 100=#CECBF6 */
-svg .c-purple > rect, svg .c-purple > circle, svg .c-purple > ellipse { fill: #3C3489; stroke: #AFA9EC; }
+/* Color ramps: fill = 800 stop, stroke = 400 stop (mid-luminance, less
+   shouty than 200), 1px wide so it's crisp not sub-pixel. Text uses 100
+   (title) and 200 (subtitle) for legibility against the dark fills. */
+
+/* Purple: fill=800 #3C3489, stroke=400 #7F77DD, .th/.t=100 #CECBF6, .ts=200 #AFA9EC */
+svg .c-purple > rect, svg .c-purple > circle, svg .c-purple > ellipse,
+svg rect.c-purple, svg circle.c-purple, svg ellipse.c-purple { fill: #3C3489; stroke: #7F77DD; stroke-width: 1; }
 svg .c-purple > .th, svg .c-purple > .t { fill: #CECBF6; }
 svg .c-purple > .ts { fill: #AFA9EC; }
-svg rect.c-purple, svg circle.c-purple, svg ellipse.c-purple { fill: #3C3489; stroke: #AFA9EC; }
 
-/* Teal: 800=#085041, 200=#5DCAA5, 100=#9FE1CB */
-svg .c-teal > rect, svg .c-teal > circle, svg .c-teal > ellipse { fill: #085041; stroke: #5DCAA5; }
+/* Teal: fill=800 #085041, stroke=400 #1D9E75, .th/.t=100 #9FE1CB, .ts=200 #5DCAA5 */
+svg .c-teal > rect, svg .c-teal > circle, svg .c-teal > ellipse,
+svg rect.c-teal, svg circle.c-teal, svg ellipse.c-teal { fill: #085041; stroke: #1D9E75; stroke-width: 1; }
 svg .c-teal > .th, svg .c-teal > .t { fill: #9FE1CB; }
 svg .c-teal > .ts { fill: #5DCAA5; }
-svg rect.c-teal, svg circle.c-teal, svg ellipse.c-teal { fill: #085041; stroke: #5DCAA5; }
 
-/* Coral: 800=#712B13, 200=#F0997B, 100=#F5C4B3 */
-svg .c-coral > rect, svg .c-coral > circle, svg .c-coral > ellipse { fill: #712B13; stroke: #F0997B; }
+/* Coral: fill=800 #712B13, stroke=400 #D85A30, .th/.t=100 #F5C4B3, .ts=200 #F0997B */
+svg .c-coral > rect, svg .c-coral > circle, svg .c-coral > ellipse,
+svg rect.c-coral, svg circle.c-coral, svg ellipse.c-coral { fill: #712B13; stroke: #D85A30; stroke-width: 1; }
 svg .c-coral > .th, svg .c-coral > .t { fill: #F5C4B3; }
 svg .c-coral > .ts { fill: #F0997B; }
-svg rect.c-coral, svg circle.c-coral, svg ellipse.c-coral { fill: #712B13; stroke: #F0997B; }
 
-/* Pink: 800=#72243E, 200=#ED93B1, 100=#F4C0D1 */
-svg .c-pink > rect, svg .c-pink > circle, svg .c-pink > ellipse { fill: #72243E; stroke: #ED93B1; }
+/* Pink: fill=800 #72243E, stroke=400 #D4537E, .th/.t=100 #F4C0D1, .ts=200 #ED93B1 */
+svg .c-pink > rect, svg .c-pink > circle, svg .c-pink > ellipse,
+svg rect.c-pink, svg circle.c-pink, svg ellipse.c-pink { fill: #72243E; stroke: #D4537E; stroke-width: 1; }
 svg .c-pink > .th, svg .c-pink > .t { fill: #F4C0D1; }
 svg .c-pink > .ts { fill: #ED93B1; }
-svg rect.c-pink, svg circle.c-pink, svg ellipse.c-pink { fill: #72243E; stroke: #ED93B1; }
 
-/* Gray: 800=#444441, 200=#B4B2A9, 100=#D3D1C7 */
-svg .c-gray > rect, svg .c-gray > circle, svg .c-gray > ellipse { fill: #444441; stroke: #B4B2A9; }
+/* Gray: fill=800 #444441, stroke=400 #888780, .th/.t=100 #D3D1C7, .ts=200 #B4B2A9 */
+svg .c-gray > rect, svg .c-gray > circle, svg .c-gray > ellipse,
+svg rect.c-gray, svg circle.c-gray, svg ellipse.c-gray { fill: #444441; stroke: #888780; stroke-width: 1; }
 svg .c-gray > .th, svg .c-gray > .t { fill: #D3D1C7; }
 svg .c-gray > .ts { fill: #B4B2A9; }
-svg rect.c-gray, svg circle.c-gray, svg ellipse.c-gray { fill: #444441; stroke: #B4B2A9; }
 
-/* Blue: 800=#0C447C, 200=#85B7EB, 100=#B5D4F4 */
-svg .c-blue > rect, svg .c-blue > circle, svg .c-blue > ellipse { fill: #0C447C; stroke: #85B7EB; }
+/* Blue: fill=800 #0C447C, stroke=400 #378ADD, .th/.t=100 #B5D4F4, .ts=200 #85B7EB */
+svg .c-blue > rect, svg .c-blue > circle, svg .c-blue > ellipse,
+svg rect.c-blue, svg circle.c-blue, svg ellipse.c-blue { fill: #0C447C; stroke: #378ADD; stroke-width: 1; }
 svg .c-blue > .th, svg .c-blue > .t { fill: #B5D4F4; }
 svg .c-blue > .ts { fill: #85B7EB; }
-svg rect.c-blue, svg circle.c-blue, svg ellipse.c-blue { fill: #0C447C; stroke: #85B7EB; }
 
-/* Green: 800=#27500A, 200=#97C459, 100=#C0DD97 */
-svg .c-green > rect, svg .c-green > circle, svg .c-green > ellipse { fill: #27500A; stroke: #97C459; }
+/* Green: fill=800 #27500A, stroke=400 #639922, .th/.t=100 #C0DD97, .ts=200 #97C459 */
+svg .c-green > rect, svg .c-green > circle, svg .c-green > ellipse,
+svg rect.c-green, svg circle.c-green, svg ellipse.c-green { fill: #27500A; stroke: #639922; stroke-width: 1; }
 svg .c-green > .th, svg .c-green > .t { fill: #C0DD97; }
 svg .c-green > .ts { fill: #97C459; }
-svg rect.c-green, svg circle.c-green, svg ellipse.c-green { fill: #27500A; stroke: #97C459; }
 
-/* Amber: 800=#633806, 200=#EF9F27, 100=#FAC775 */
-svg .c-amber > rect, svg .c-amber > circle, svg .c-amber > ellipse { fill: #633806; stroke: #EF9F27; }
+/* Amber: fill=800 #633806, stroke=400 #BA7517, .th/.t=100 #FAC775, .ts=200 #EF9F27 */
+svg .c-amber > rect, svg .c-amber > circle, svg .c-amber > ellipse,
+svg rect.c-amber, svg circle.c-amber, svg ellipse.c-amber { fill: #633806; stroke: #BA7517; stroke-width: 1; }
 svg .c-amber > .th, svg .c-amber > .t { fill: #FAC775; }
 svg .c-amber > .ts { fill: #EF9F27; }
-svg rect.c-amber, svg circle.c-amber, svg ellipse.c-amber { fill: #633806; stroke: #EF9F27; }
 
-/* Red: 800=#791F1F, 200=#F09595, 100=#F7C1C1 */
-svg .c-red > rect, svg .c-red > circle, svg .c-red > ellipse { fill: #791F1F; stroke: #F09595; }
+/* Red: fill=800 #791F1F, stroke=400 #E24B4A, .th/.t=100 #F7C1C1, .ts=200 #F09595 */
+svg .c-red > rect, svg .c-red > circle, svg .c-red > ellipse,
+svg rect.c-red, svg circle.c-red, svg ellipse.c-red { fill: #791F1F; stroke: #E24B4A; stroke-width: 1; }
 svg .c-red > .th, svg .c-red > .t { fill: #F7C1C1; }
 svg .c-red > .ts { fill: #F09595; }
-svg rect.c-red, svg circle.c-red, svg ellipse.c-red { fill: #791F1F; stroke: #F09595; }
 
 /* Pre-styled form elements */
 button {
