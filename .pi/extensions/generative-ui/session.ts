@@ -9,16 +9,21 @@ import type { GlimpseWindowLike, OpenOptions, Opener } from "./glimpse-window.js
  *   - `onChunk(html)` is called repeatedly while the model streams.
  *   - `onComplete(html)` is called when the tool call finishes — final
  *     content is pushed with `final: true` and scripts execute.
- *   - `awaitInteraction()` resolves when the user sends a message, the
- *     window closes, an error fires, the signal aborts, or the timeout
- *     hits — whichever wins. Call once per session.
+ *   - `close()` closes the window.
+ *
+ * The session does not wait for or surface user interactions. Once
+ * `onComplete` resolves, the agent's tool call is free to return; the
+ * window stays open and the user closes it whenever they like.
  *
  * The page receives `{type: "content", html, final}` messages; nothing
- * else. Features are attached once on open() and live until close.
+ * else. RPC features (svg.copy, svg.save, …) are attached once on open()
+ * and live until the window closes.
  */
 
 const FLUSH_DEBOUNCE_MS = 150;
-const DEFAULT_TIMEOUT_MS = 120_000;
+// Skip noise chunks before the model has emitted enough HTML for the page
+// to display anything meaningful (a stray `<d` or `<svg`). 20 bytes is just
+// past the threshold of "tag with at least one attribute and a closing >".
 const MIN_CHUNK_BYTES = 20;
 
 export type { OpenOptions, Opener } from "./glimpse-window.js";
@@ -32,12 +37,14 @@ export class WidgetSession {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private finalized = false;
   private closed = false;
-  private interactionStarted = false;
 
   constructor(open: Opener, opts: OpenOptions) {
     this.win = open(RUNTIME_HTML, opts);
     this.win.on("closed", () => { this.closed = true; });
-    this.win.on("error",  () => { this.closed = true; });
+    this.win.on("error",  (err) => {
+      this.closed = true;
+      console.error("[glimpse-ui] window error:", err);
+    });
 
     this.readyPromise = new Promise<void>((resolve) => {
       this.win.on("ready", () => resolve());
@@ -84,48 +91,9 @@ export class WidgetSession {
     }
   }
 
-  /**
-   * Resolves with the reason this session ended. Multiple terminators race;
-   * the first wins, the rest are dropped. Must be called at most once.
-   */
-  awaitInteraction(signal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<SessionResult> {
-    if (this.interactionStarted) {
-      throw new Error("awaitInteraction() may only be called once per session");
-    }
-    this.interactionStarted = true;
-
-    return new Promise<SessionResult>((resolve) => {
-      let done = false;
-      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-      let abortHandler: (() => void) | null = null;
-
-      const finish = (result: SessionResult): void => {
-        if (done) return;
-        done = true;
-        if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
-        if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
-        resolve(result);
-      };
-
-      this.rpc.onUserMessage((data) => finish({ kind: "message", data }));
-      this.win.on("closed", () => finish({ kind: "closed" }));
-      this.win.on("error",  (err) => finish({ kind: "error", error: err }));
-
-      if (signal) {
-        if (signal.aborted) {
-          try { this.win.close(); } catch {}
-          finish({ kind: "aborted" });
-          return;
-        }
-        abortHandler = () => {
-          try { this.win.close(); } catch {}
-          finish({ kind: "aborted" });
-        };
-        signal.addEventListener("abort", abortHandler, { once: true });
-      }
-
-      timeoutHandle = setTimeout(() => finish({ kind: "timeout" }), timeoutMs);
-    });
+  /** Register a callback for when the window is closed by the user. */
+  onClosed(fn: () => void): void {
+    this.win.on("closed", fn);
   }
 
   close(): void {
@@ -135,10 +103,3 @@ export class WidgetSession {
     try { this.win.close(); } catch {}
   }
 }
-
-export type SessionResult =
-  | { kind: "message"; data: unknown }
-  | { kind: "closed" }
-  | { kind: "error"; error: Error }
-  | { kind: "aborted" }
-  | { kind: "timeout" };

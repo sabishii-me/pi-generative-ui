@@ -6,9 +6,10 @@ import type { GlimpseWindowLike } from "./glimpse-window.js";
  * Host-side RPC handler registry attached to a Glimpse window.
  *
  * One `attach(win)` per window installs a single `message` listener that
- * routes `rpc-call` envelopes to handlers and forwards `user-message`
- * payloads to registered listeners. Idempotent: a second call returns the
- * same `RpcHost`.
+ * routes `rpc-call` envelopes to handlers. Idempotent: a second call
+ * returns the same `RpcHost`. Anything that isn't a protocol message
+ * (e.g. raw `window.glimpse.send(...)` payloads from widget code) is
+ * dropped — we deliberately don't surface widget interactions to the agent.
  */
 
 export type RpcHandler = (params: unknown) => Promise<unknown> | unknown;
@@ -16,7 +17,6 @@ export type RpcHandler = (params: unknown) => Promise<unknown> | unknown;
 export interface RpcHost {
   handle(method: string, fn: RpcHandler): void;
   push(msg: HostToPage): void;
-  onUserMessage(fn: (data: unknown) => void): void;
 }
 
 const installed = new WeakMap<GlimpseWindowLike, RpcHost>();
@@ -40,7 +40,6 @@ export function attach(win: GlimpseWindowLike): RpcHost {
   if (existing) return existing;
 
   const handlers = new Map<string, RpcHandler>();
-  const userListeners = new Set<(data: unknown) => void>();
 
   function push(msg: HostToPage): void {
     win.send(`window.__glimpseUI&&window.__glimpseUI.deliver(${jsLiteral(msg)})`);
@@ -50,21 +49,11 @@ export function attach(win: GlimpseWindowLike): RpcHost {
     handlers.set(method, fn);
   }
 
-  function onUserMessage(fn: (data: unknown) => void): void {
-    userListeners.add(fn);
-  }
-
   win.on("message", async (raw) => {
+    // Only RPC traffic is routed; everything else (including widget
+    // glimpse.send payloads) is dropped on the floor by design.
     if (!isPageToHost(raw)) return;
 
-    if (raw.type === "user-message") {
-      for (const fn of userListeners) {
-        try { fn(raw.data); } catch (err) { console.error("[glimpse-ui] user listener threw:", err); }
-      }
-      return;
-    }
-
-    // raw.type === "rpc-call"
     const handler = handlers.get(raw.method);
     if (!handler) {
       push({ type: "rpc-result", id: raw.id, ok: false, error: `Unknown RPC method: ${raw.method}` });
@@ -79,7 +68,7 @@ export function attach(win: GlimpseWindowLike): RpcHost {
     }
   });
 
-  const host: RpcHost = { handle, push, onUserMessage };
+  const host: RpcHost = { handle, push };
   installed.set(win, host);
   return host;
 }

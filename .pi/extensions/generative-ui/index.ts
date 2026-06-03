@@ -11,6 +11,33 @@ import type { Opener } from "./glimpse-window.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GLIMPSE_PATH = join(__dirname, "../../../node_modules/glimpseui/src/glimpse.mjs");
 
+// ── Tool schemas ───────────────────────────────────────────────────────
+const ReadMeParams = Type.Object({
+  modules: Type.Array(StringEnum(AVAILABLE_MODULES), {
+    description: "Which module(s) to load. Pick all that fit.",
+  }),
+});
+
+const ShowWidgetParams = Type.Object({
+  i_have_seen_read_me: Type.Boolean({
+    description: "Confirm you have already called visualize_read_me in this conversation.",
+  }),
+  title: Type.String({
+    description: "Short snake_case identifier for this widget (used as window title).",
+  }),
+  widget_code: Type.String({
+    description:
+      "HTML or SVG code to render. For SVG: raw SVG starting with <svg>. " +
+      "For HTML: raw content fragment, no DOCTYPE/<html>/<head>/<body>.",
+  }),
+  width:    Type.Optional(Type.Number({ description: "Window width in pixels. Default: 800." })),
+  height:   Type.Optional(Type.Number({ description: "Window height in pixels. Default: 600." })),
+  floating: Type.Optional(Type.Boolean({ description: "Keep window always on top. Default: false." })),
+});
+
+interface ReadMeDetails    { modules: readonly Module[]; }
+interface ShowWidgetDetails { title: string; width: number; height: number; isSVG: boolean; }
+
 export default function (pi: ExtensionAPI) {
   const activeSessions = new Set<WidgetSession>();
   let openCache: Opener | null = null;
@@ -81,7 +108,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── read_me tool ───────────────────────────────────────────────────────
 
-  pi.registerTool({
+  pi.registerTool<typeof ReadMeParams, ReadMeDetails>({
     name: "visualize_read_me",
     label: "Read Guidelines",
     description:
@@ -93,22 +120,17 @@ export default function (pi: ExtensionAPI) {
       "Do NOT mention the read_me call to the user — call it silently, then proceed directly to building the widget.",
       "Pick the modules that match your use case: interactive, chart, mockup, art, diagram.",
     ],
-    parameters: Type.Object({
-      modules: Type.Array(
-        StringEnum(AVAILABLE_MODULES),
-        { description: "Which module(s) to load. Pick all that fit." },
-      ),
-    }),
+    parameters: ReadMeParams,
 
     async execute(_id, params) {
-      const content = getGuidelines(params.modules as readonly Module[]);
+      const modules = params.modules as readonly Module[];
       return {
-        content: [{ type: "text" as const, text: content }],
-        details: { modules: params.modules },
+        content: [{ type: "text" as const, text: getGuidelines(modules) }],
+        details: { modules },
       };
     },
 
-    renderCall(args: { modules?: readonly string[] }, theme) {
+    renderCall(args, theme) {
       const mods = (args.modules ?? []).join(", ");
       return new Text(theme.fg("toolTitle", theme.bold("read_me ")) + theme.fg("muted", mods), 0, 0);
     },
@@ -121,46 +143,37 @@ export default function (pi: ExtensionAPI) {
 
   // ── show_widget tool ───────────────────────────────────────────────────
 
-  pi.registerTool({
+  pi.registerTool<typeof ShowWidgetParams, ShowWidgetDetails>({
     name: "show_widget",
     label: "Show Widget",
     description:
-      "Show visual content — SVG graphics, diagrams, charts, or interactive HTML widgets — in a native window. " +
+      "Show visual content — SVG graphics, diagrams, charts, or interactive HTML/JS widgets — in a native window. " +
       "Supports macOS, Linux, and Windows. " +
-      "The HTML is rendered in a native WebView with full CSS/JS support including Canvas and CDN libraries. " +
-      "The page gets a window.glimpse.send(data) bridge to send JSON data back to the agent. " +
+      "The HTML is rendered in a native WebView with full CSS/JS support including Canvas, animations, and CDN libraries. " +
+      "Widgets are display-only from the agent's perspective: there is no return channel for clicks/input. " +
+      "In-widget interactivity (sliders that update charts, hover states, animations, click handlers driving local state) all works — " +
+      "but the agent does not receive callbacks. Do NOT write `glimpse.send(...)` or `sendPrompt(...)` patterns; they are no-ops here. " +
       "IMPORTANT: Call visualize_read_me once before your first show_widget call.",
     promptSnippet:
-      "Render interactive HTML/SVG widgets in a native window (cross-platform WebView). Supports full CSS, JS, Canvas, Chart.js.",
+      "Render interactive HTML/SVG widgets in a native window. Full CSS, JS, Canvas, Chart.js. Display-only — no callbacks to the agent.",
     promptGuidelines: [
       "Use show_widget when the user asks for visual content: charts, diagrams, interactive explainers, UI mockups, art.",
       "Always call visualize_read_me first to load design guidelines, then set i_have_seen_read_me: true.",
-      "The widget opens in a native window — it has full browser capabilities (Canvas, JS, CDN libraries).",
+      "The widget opens in a native window with full browser capabilities (Canvas, JS, CDN libraries).",
       "Structure HTML as fragments: no DOCTYPE/<html>/<head>/<body>. Style first, then HTML, then scripts.",
-      "The page has window.glimpse.send(data) to send data back. Use it for user choices and interactions.",
+      "Widgets are display-only. The agent does not receive widget interactions — do not emit `glimpse.send(...)` or `sendPrompt(...)`. " +
+        "In-widget interactivity (sliders, hovers, controls that mutate the widget's own DOM) is fully supported and encouraged.",
       "Keep widgets focused and appropriately sized. Default is 800x600 but adjust to fit content.",
       "For SVG: start code with <svg> tag.",
     ],
-    parameters: Type.Object({
-      i_have_seen_read_me: Type.Boolean({
-        description: "Confirm you have already called visualize_read_me in this conversation.",
-      }),
-      title: Type.String({
-        description: "Short snake_case identifier for this widget (used as window title).",
-      }),
-      widget_code: Type.String({
-        description:
-          "HTML or SVG code to render. For SVG: raw SVG starting with <svg>. " +
-          "For HTML: raw content fragment, no DOCTYPE/<html>/<head>/<body>.",
-      }),
-      width:    Type.Optional(Type.Number({ description: "Window width in pixels. Default: 800." })),
-      height:   Type.Optional(Type.Number({ description: "Window height in pixels. Default: 600." })),
-      floating: Type.Optional(Type.Boolean({ description: "Keep window always on top. Default: false." })),
-    }),
+    parameters: ShowWidgetParams,
 
     async execute(_id, params, signal) {
       if (!params.i_have_seen_read_me) {
         throw new Error("You must call visualize_read_me before show_widget. Set i_have_seen_read_me: true after doing so.");
+      }
+      if (signal?.aborted) {
+        throw new Error("show_widget aborted before execution");
       }
 
       const code = params.widget_code;
@@ -179,31 +192,32 @@ export default function (pi: ExtensionAPI) {
         session = new WidgetSession(open, { title, width, height, floating: params.floating });
         activeSessions.add(session);
       }
+
+      // Wire abort BEFORE the async onComplete await — abort during
+      // streaming flush must close the window. The listener also stays
+      // attached for after we return, so an abort that arrives after the
+      // tool resolves still cleans up the still-open window.
+      session.onClosed(() => activeSessions.delete(session));
+      if (signal) {
+        if (signal.aborted) {
+          session.close();
+          throw new Error("show_widget aborted before execution");
+        }
+        signal.addEventListener("abort", () => session.close(), { once: true });
+      }
+
       await session.onComplete(code);
-
-      const result = await session.awaitInteraction(signal);
-      activeSessions.delete(session);
-
-      const messageData = result.kind === "message" ? result.data : null;
-      const reason =
-        result.kind === "message"  ? "User sent data from widget." :
-        result.kind === "closed"   ? "Window closed by user." :
-        result.kind === "error"    ? `Error: ${result.error.message}` :
-        result.kind === "aborted"  ? "Aborted." :
-        /* timeout */                "Widget still open (timed out waiting for interaction).";
 
       return {
         content: [{
           type: "text" as const,
-          text: messageData
-            ? `Widget rendered. User interaction data: ${JSON.stringify(messageData)}`
-            : `Widget "${title}" rendered and shown to the user (${width}×${height}). ${reason}`,
+          text: `Widget "${title}" rendered (${width}×${height}).`,
         }],
-        details: { title: params.title, width, height, isSVG, messageData, closedReason: reason },
+        details: { title: params.title, width, height, isSVG },
       };
     },
 
-    renderCall(args: { title?: string; width?: number; height?: number }, theme) {
+    renderCall(args, theme) {
       const title = (args.title ?? "widget").replace(/_/g, " ");
       const size = args.width && args.height ? ` ${args.width}×${args.height}` : "";
       let text = theme.fg("toolTitle", theme.bold("show_widget ")) + theme.fg("accent", title);
@@ -211,15 +225,13 @@ export default function (pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result: { details?: { title?: string; width?: number; height?: number; isSVG?: boolean; closedReason?: string; messageData?: unknown } }, { isPartial, expanded }, theme) {
+    renderResult(result, { isPartial }, theme) {
       if (isPartial) return new Text(theme.fg("warning", "⟳ Widget rendering..."), 0, 0);
-      const d = result.details ?? {};
-      const title = (d.title ?? "widget").replace(/_/g, " ");
+      const d = result.details;
+      const title = (d?.title ?? "widget").replace(/_/g, " ");
       let text = theme.fg("success", "✓ ") + theme.fg("accent", title);
-      text += theme.fg("dim", ` ${d.width ?? 800}×${d.height ?? 600}`);
-      if (d.isSVG) text += theme.fg("dim", " (SVG)");
-      if (d.closedReason) text += "\n" + theme.fg("muted", `  ${d.closedReason}`);
-      if (expanded && d.messageData) text += "\n" + theme.fg("dim", `  Data: ${JSON.stringify(d.messageData, null, 2)}`);
+      text += theme.fg("dim", ` ${d?.width ?? 800}×${d?.height ?? 600}`);
+      if (d?.isSVG) text += theme.fg("dim", " (SVG)");
       return new Text(text, 0, 0);
     },
   });

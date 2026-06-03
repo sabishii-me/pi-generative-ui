@@ -25,15 +25,16 @@ describe("protocol guards", () => {
   });
 
   describe("isPageToHost", () => {
-    it("accepts rpc-call and user-message", () => {
+    it("accepts rpc-call", () => {
       expect(isPageToHost({ type: "rpc-call", id: "r1", method: "x", params: null })).toBe(true);
-      expect(isPageToHost({ type: "user-message", data: { choice: "yes" } })).toBe(true);
     });
     it("rejects host→page discriminators", () => {
       expect(isPageToHost({ type: "content", html: "", final: false })).toBe(false);
       expect(isPageToHost({ type: "rpc-result", id: "r1", ok: true })).toBe(false);
     });
-    it("rejects non-objects", () => {
+    it("rejects everything else (including unstructured widget payloads)", () => {
+      expect(isPageToHost({ type: "user-message", data: { choice: "yes" } })).toBe(false);
+      expect(isPageToHost({ choice: "yes" })).toBe(false);
       expect(isPageToHost(null)).toBe(false);
       expect(isPageToHost([])).toBe(false);
       expect(isPageToHost("x")).toBe(false);

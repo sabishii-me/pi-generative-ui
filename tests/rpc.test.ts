@@ -52,31 +52,18 @@ describe("rpc.attach", () => {
     } as never);
   });
 
-  it("delivers user-message payloads to onUserMessage listeners", () => {
-    const win = new FakeWindow();
-    const rpc = attach(win);
-    const seen: unknown[] = [];
-    rpc.onUserMessage((d) => seen.push(d));
-
-    win.emitMessage({ type: "user-message", data: { choice: "yes" } });
-    win.emitMessage({ type: "user-message", data: 42 });
-
-    expect(seen).toEqual([{ choice: "yes" }, 42]);
-  });
-
-  it("ignores malformed page→host messages", async () => {
+  it("ignores widget glimpse.send payloads (no user-message envelope routing)", async () => {
     const win = new FakeWindow();
     attach(win);
-    const seen: unknown[] = [];
-    attach(win).onUserMessage((d) => seen.push(d));
 
+    win.emitMessage({ choice: "yes" });
+    win.emitMessage({ type: "user-message", data: 42 });
     win.emitMessage(null);
     win.emitMessage("garbage");
-    win.emitMessage({ type: "content", html: "x", final: true }); // wrong direction
+    win.emitMessage({ type: "content", html: "x", final: true });
     win.emitMessage({ type: "unknown" });
 
     await new Promise((r) => setImmediate(r));
-    expect(seen).toEqual([]);
     expect(win.sent).toEqual([]);
   });
 

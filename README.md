@@ -21,7 +21,7 @@ This extension replicates that system for pi:
 5. **Scripts execute on completion** - Chart.js, D3, Three.js, anything from CDN
 6. **Hover any `<svg>` for export** - built-in floating menu copies SVG to clipboard or saves it via the native Save dialog
 
-The widget window has full browser capabilities and a bidirectional bridge - `window.glimpse.send(data)` sends data back to the agent. Widgets can also call typed RPC methods via `window.__glimpseUI.rpc(method, params)`.
+The widget window has full browser capabilities. Widgets are display-only from the agent's perspective — there's no return channel for clicks or input. In-widget interactivity (sliders, hover states, animations, controls that drive the widget's own DOM) is fully supported. Features that need host-side capabilities (like SVG copy/save) call into the host via `window.__glimpseUI.rpc(method, params)`.
 
 ## Install
 
@@ -68,14 +68,16 @@ Five modules, loaded on demand:
 
 ### Streaming architecture
 
-The extension intercepts pi's streaming events (`toolcall_start` / `toolcall_delta` / `toolcall_end`). A `WidgetSession` owns one Glimpse window from creation through user interaction:
+The extension intercepts pi's streaming events (`toolcall_start` / `toolcall_delta` / `toolcall_end`). A `WidgetSession` owns one Glimpse window for the duration of a `show_widget` call:
 
 ```
 toolcall_start    → new WidgetSession(open, {title, width, height})
-toolcall_delta    → session.onChunk(html)        # debounced 150ms
-toolcall_end      → session.onComplete(html)     # final + run scripts
-execute()         → session.awaitInteraction()   # races user message / closed / error / abort / timeout
+toolcall_delta    → session.onChunk(html)     # debounced 150ms
+toolcall_end      → session.onComplete(html)  # final + run scripts
+execute()         → returns immediately; window stays open
 ```
+
+The agent's tool call resolves the moment the final HTML lands; the window stays open until the user dismisses it. No 2-minute "waiting for interaction" timeout.
 
 The page-side runtime is a real TypeScript module bundled by esbuild into a single IIFE inlined into the shell HTML. It speaks a typed JSON protocol with the host: `{type: "content", html, final}` host→page, `{type: "user-message" | "rpc-call", ...}` page→host. No `escapeJS`, no eval-strings-as-business-logic.
 

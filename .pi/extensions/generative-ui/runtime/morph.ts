@@ -37,14 +37,35 @@ export function applyHTML(root: HTMLElement, html: string): void {
   });
 }
 
-export function runScripts(root: HTMLElement): void {
-  const scripts = root.querySelectorAll("script");
-  for (const old of Array.from(scripts)) {
+/**
+ * Execute every <script> in #root, in document order.
+ *
+ * Sequential awaiting matters: dynamically-inserted external scripts load
+ * asynchronously, so the naive "replace them all in a loop" approach runs
+ * inline scripts before their CDN deps finish loading (Chart.js / D3 /
+ * mermaid not yet defined → ReferenceError → blank widget).
+ *
+ * For each script we clone into a fresh element so the browser actually
+ * executes it (innerHTML alone doesn't run scripts). External scripts: we
+ * await `load`. Inline: synchronous on append.
+ */
+export async function runScripts(root: HTMLElement): Promise<void> {
+  const scripts = Array.from(root.querySelectorAll("script"));
+  for (const old of scripts) {
     const s = document.createElement("script");
     for (const attr of Array.from(old.attributes)) {
       s.setAttribute(attr.name, attr.value);
     }
-    if (!old.src) s.textContent = old.textContent ?? "";
-    old.parentNode?.replaceChild(s, old);
+    if (old.src) {
+      const loaded = new Promise<void>((resolve, reject) => {
+        s.addEventListener("load",  () => resolve(), { once: true });
+        s.addEventListener("error", () => reject(new Error(`Failed to load ${old.src}`)), { once: true });
+      });
+      old.parentNode?.replaceChild(s, old);
+      await loaded;
+    } else {
+      s.textContent = old.textContent ?? "";
+      old.parentNode?.replaceChild(s, old);
+    }
   }
 }

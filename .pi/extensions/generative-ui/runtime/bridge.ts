@@ -1,5 +1,5 @@
 import type { HostToPage, PageToHost } from "../protocol.js";
-import { isHostToPage, isPageToHost } from "../protocol.js";
+import { isHostToPage } from "../protocol.js";
 
 /**
  * The bridge owns both directions of the host↔page channel.
@@ -9,7 +9,9 @@ import { isHostToPage, isPageToHost } from "../protocol.js";
  *
  * Listeners subscribe by message type. RPC adds a small request/response
  * layer on top. Widget code can call `window.__glimpseUI.rpc(method, params)`
- * directly for custom features.
+ * for custom features. Widget code can also call `window.glimpse.send(...)`,
+ * but those payloads are dropped on the floor host-side by design — this
+ * extension doesn't route widget interactions back to the agent.
  */
 
 type Handler<T extends HostToPage["type"]> = (msg: Extract<HostToPage, { type: T }>) => void;
@@ -50,32 +52,13 @@ export function on<T extends HostToPage["type"]>(type: T, fn: Handler<T>): () =>
 
 // ── page → host ─────────────────────────────────────────────────────────
 
-let nativeSend: ((data: unknown) => void) | null = null;
-
 function send(msg: PageToHost): void {
-  if (!nativeSend) {
-    console.warn("[glimpse-ui] native send unavailable");
-    return;
-  }
-  nativeSend(msg);
-}
-
-/**
- * Wrap window.glimpse.send so user code calling glimpse.send({...}) without
- * our envelope gets wrapped as a `user-message`. Anything that already
- * conforms to PageToHost passes through.
- */
-function wrapGlimpse(): void {
   const g = window.glimpse;
   if (!g || typeof g.send !== "function") {
     console.warn("[glimpse-ui] window.glimpse.send unavailable; rpc disabled");
     return;
   }
-  nativeSend = g.send.bind(g);
-  g.send = (data: unknown) => {
-    if (isPageToHost(data)) nativeSend!(data);
-    else nativeSend!({ type: "user-message", data } satisfies PageToHost);
-  };
+  g.send(msg);
 }
 
 // ── RPC (page → host) ───────────────────────────────────────────────────
@@ -114,5 +97,4 @@ export function rpc<T = unknown>(method: string, params: unknown = null, timeout
 /** Install the host→page deliver hook and the public widget API. */
 export function install(): void {
   window.__glimpseUI = { deliver, rpc };
-  wrapGlimpse();
 }

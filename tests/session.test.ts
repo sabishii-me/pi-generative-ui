@@ -102,121 +102,44 @@ describe("WidgetSession", () => {
     expect(contentMessages(win)).toHaveLength(1);
   });
 
-  describe("awaitInteraction", () => {
-    it("resolves with 'message' when the user sends data", async () => {
+  describe("lifecycle", () => {
+    it("close() closes the window and cancels any pending flush", async () => {
       const { open, wins } = makeOpener();
       const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
       const win = wins[0];
       win.emitReady();
 
-      const p = s.awaitInteraction(undefined, 60_000);
-      win.emitMessage({ type: "user-message", data: { choice: "yes" } });
-      const r = await p;
-      expect(r).toEqual({ kind: "message", data: { choice: "yes" } });
-    });
+      s.onChunk("a".repeat(40));
+      s.close();
+      await vi.advanceTimersByTimeAsync(200);
 
-    it("resolves with 'closed' when the window closes", async () => {
-      const { open, wins } = makeOpener();
-      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
-      const win = wins[0];
-      win.emitReady();
-
-      const p = s.awaitInteraction(undefined, 60_000);
-      win.close();
-      const r = await p;
-      expect(r.kind).toBe("closed");
-    });
-
-    it("resolves with 'error' on window error", async () => {
-      const { open, wins } = makeOpener();
-      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
-      const win = wins[0];
-      win.emitReady();
-
-      const p = s.awaitInteraction(undefined, 60_000);
-      win.emitError(new Error("boom"));
-      const r = await p;
-      expect(r).toMatchObject({ kind: "error" });
-    });
-
-    it("resolves with 'aborted' when the signal fires", async () => {
-      const { open, wins } = makeOpener();
-      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
-      const win = wins[0];
-      win.emitReady();
-
-      const ctrl = new AbortController();
-      const p = s.awaitInteraction(ctrl.signal, 60_000);
-      ctrl.abort();
-      const r = await p;
-      expect(r.kind).toBe("aborted");
       expect(win.closed).toBe(true);
+      expect(contentMessages(win)).toEqual([]);
     });
 
-    it("resolves with 'timeout' after the configured timeout", async () => {
+    it("onClosed fires when the window closes", async () => {
       const { open, wins } = makeOpener();
       const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
       const win = wins[0];
       win.emitReady();
 
-      const p = s.awaitInteraction(undefined, 5_000);
-      vi.advanceTimersByTime(5_001);
-      const r = await p;
-      expect(r.kind).toBe("timeout");
-    });
-
-    it("throws if called more than once", async () => {
-      const { open, wins } = makeOpener();
-      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
-      wins[0].emitReady();
-      void s.awaitInteraction(undefined, 60_000);
-      expect(() => s.awaitInteraction(undefined, 60_000)).toThrow(/only be called once/);
-    });
-
-    it("clears the timeout when another terminator wins (no dangling timer)", async () => {
-      const { open, wins } = makeOpener();
-      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
-      const win = wins[0];
-      win.emitReady();
-
-      const p = s.awaitInteraction(undefined, 5_000);
-      win.emitMessage({ type: "user-message", data: 1 });
-      await p;
-      // If the timeout were still armed, advancing past it would emit
-      // a second resolve attempt. Easier proof: getTimerCount drops to 0.
-      expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it("removes the abort listener when another terminator wins", async () => {
-      const { open, wins } = makeOpener();
-      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
-      const win = wins[0];
-      win.emitReady();
-
-      const ctrl = new AbortController();
-      const p = s.awaitInteraction(ctrl.signal, 60_000);
-      win.emitMessage({ type: "user-message", data: 1 });
-      await p;
-
-      // Firing abort after the fact must NOT try to close a window we no
-      // longer own. With removeEventListener, the handler is gone.
-      ctrl.abort();
-      expect(win.closed).toBe(false);
-    });
-
-    it("the first terminator wins; later events are ignored", async () => {
-      const { open, wins } = makeOpener();
-      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
-      const win = wins[0];
-      win.emitReady();
-
-      const p = s.awaitInteraction(undefined, 60_000);
-      win.emitMessage({ type: "user-message", data: 1 });
+      let fired = false;
+      s.onClosed(() => { fired = true; });
       win.close();
-      win.emitError(new Error("ignored"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fired).toBe(true);
+    });
 
-      const r = await p;
-      expect(r).toEqual({ kind: "message", data: 1 });
+    it("chunks after close are ignored", async () => {
+      const { open, wins } = makeOpener();
+      const s = new WidgetSession(open, { title: "t", width: 100, height: 100 });
+      const win = wins[0];
+      win.emitReady();
+
+      s.close();
+      s.onChunk("x".repeat(40));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(contentMessages(win)).toEqual([]);
     });
   });
 });

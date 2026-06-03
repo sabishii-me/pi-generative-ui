@@ -31,7 +31,9 @@ function boot(): void {
     const { html, final } = queued;
     queued = null;
     applyHTML(root!, html);
-    if (final) runScripts(root!);
+    if (final) {
+      runScripts(root!).catch((err) => console.error("[glimpse-ui] runScripts failed:", err));
+    }
   }
 
   on("content", (msg) => {
