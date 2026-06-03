@@ -1,0 +1,65 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        node: ["20", "22"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Linux uses Glimpse's Chromium-CDP fallback (no Rust/GTK toolchain
+      # needed). Skip the postinstall build step that would otherwise try
+      # to compile the native binary.
+      - name: install (linux — skip native build)
+        if: runner.os == 'Linux'
+        run: npm ci --ignore-scripts
+
+      # macOS: Xcode Command Line Tools are preinstalled on the runner, so
+      # the postinstall hook compiles the Swift binary, enabling the real
+      # integration tests.
+      - name: install (macos)
+        if: runner.os == 'macOS'
+        run: npm ci
+
+      # Windows: .NET 8 SDK + WebView2 Runtime are preinstalled on
+      # windows-latest. We still run with --ignore-scripts because the
+      # integration tests are skipped on Windows in this matrix — unit
+      # tests cover the platform/win32.ts shim via mocks.
+      - name: install (windows — skip native build)
+        if: runner.os == 'Windows'
+        run: npm ci --ignore-scripts
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: build runtime bundle
+        run: npm run build:runtime
+
+      - name: verify bundle is in sync with sources
+        shell: bash
+        run: |
+          if ! git diff --quiet -- .pi/extensions/generative-ui/runtime.bundle.ts; then
+            echo "::error::runtime.bundle.ts is out of date — run 'npm run build:runtime' and commit"
+            git --no-pager diff -- .pi/extensions/generative-ui/runtime.bundle.ts | head -40
+            exit 1
+          fi
+
+      - name: unit tests
+        run: npm test

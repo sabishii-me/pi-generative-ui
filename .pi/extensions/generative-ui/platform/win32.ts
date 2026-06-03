@@ -16,7 +16,7 @@ function encodeCommand(ps: string): string {
 }
 
 function psExecutable(): string {
-  return process.env.PSExecutable || "powershell.exe";
+  return process.env.GLIMPSE_PS_PATH || "powershell.exe";
 }
 
 async function runPS(ps: string, stdinText?: string): Promise<string> {

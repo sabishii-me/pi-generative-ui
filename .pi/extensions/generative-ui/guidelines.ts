@@ -772,15 +772,19 @@ Use \`imagine_html\`. Wrap the entire thing in a single raised card. All content
 </div>
 \`\`\``;
 
-const MODULE_SECTIONS: Record<string, string[]> = {
-  art: [SVG_SETUP, ART_AND_ILLUSTRATION],
-  mockup: [UI_COMPONENTS, COLOR_PALETTE],
+const MODULE_SECTIONS = {
+  art:         [SVG_SETUP, ART_AND_ILLUSTRATION],
+  mockup:      [UI_COMPONENTS, COLOR_PALETTE],
   interactive: [UI_COMPONENTS, COLOR_PALETTE],
-  chart: [UI_COMPONENTS, COLOR_PALETTE, CHARTS_CHART_JS],
-  diagram: [COLOR_PALETTE, SVG_SETUP, DIAGRAM_TYPES],
-};
+  chart:       [UI_COMPONENTS, COLOR_PALETTE, CHARTS_CHART_JS],
+  diagram:     [COLOR_PALETTE, SVG_SETUP, DIAGRAM_TYPES],
+} as const satisfies Record<string, readonly string[]>;
 
-export function getGuidelines(modules: string[]): string {
+export type Module = keyof typeof MODULE_SECTIONS;
+
+export const AVAILABLE_MODULES = Object.keys(MODULE_SECTIONS) as readonly Module[];
+
+export function getGuidelines(modules: readonly Module[]): string {
   let content = CORE;
   const seen = new Set<string>();
   for (const mod of modules) {
@@ -795,5 +799,3 @@ export function getGuidelines(modules: string[]): string {
   }
   return content + "\n";
 }
-
-export const AVAILABLE_MODULES = Object.keys(MODULE_SECTIONS);

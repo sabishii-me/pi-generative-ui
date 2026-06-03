@@ -42,11 +42,18 @@ vi.mock("node:child_process", () => {
       }
       return { stdin: null } as { stdin: null };
     }
-    if (cb) {
-      if (execFileResult instanceof Error) cb(execFileResult);
-      else cb(null, execFileResult);
-    }
-    return { stdin: null } as { stdin: null };
+    // For paths that pipe stdin (win32 copyText), the caller writes to
+    // proc.stdin synchronously after execFile returns and BEFORE the
+    // callback fires. We give them a writable buffer, then resolve.
+    const proc = makeProc();
+    spawnCalls.push({ cmd, args, proc });
+    queueMicrotask(() => {
+      if (cb) {
+        if (execFileResult instanceof Error) cb(execFileResult);
+        else cb(null, execFileResult);
+      }
+    });
+    return proc as unknown as { stdin: typeof proc.stdin };
   }
 
   return {
@@ -153,6 +160,69 @@ describe("platform/linux", () => {
     expect(call!.args).toContain("--file-selection");
     expect(call!.args).toContain("--save");
     expect(call!.args).toContain("--filename=out.svg");
+  });
+});
+
+describe("platform/win32", () => {
+  function decodePS(b64: string): string {
+    return Buffer.from(b64, "base64").toString("utf16le");
+  }
+
+  it("copyText invokes powershell with -EncodedCommand and pipes the payload to stdin", async () => {
+    const { copyText } = await import("../.pi/extensions/generative-ui/platform/win32.js");
+    const cp = await loadCpMock();
+
+    await copyText("hello\nworld");
+
+    const call = cp.__execFileCalls.find((c) => c.cmd === "powershell.exe");
+    expect(call).toBeDefined();
+    expect(call!.args).toContain("-NoProfile");
+    expect(call!.args).toContain("-EncodedCommand");
+    const encoded = call!.args[call!.args.indexOf("-EncodedCommand") + 1];
+    expect(decodePS(encoded)).toBe("[Console]::In.ReadToEnd() | Set-Clipboard");
+
+    // Same call was also recorded as a spawn so we can read its stdin buffer.
+    const procEntry = cp.__spawnCalls.find((c) => c.cmd === "powershell.exe");
+    expect(procEntry).toBeDefined();
+    expect((procEntry!.proc as unknown as { _stdinText?: string })._stdinText).toBe("hello\nworld");
+  });
+
+  it("chooseSavePath invokes powershell with a SaveFileDialog and returns the trimmed path", async () => {
+    const { chooseSavePath } = await import("../.pi/extensions/generative-ui/platform/win32.js");
+    const cp = await loadCpMock();
+
+    cp.__setExecFileResult({ stdout: "C:\\Users\\me\\out.svg\r\n" });
+    expect(await chooseSavePath("out.svg")).toBe("C:\\Users\\me\\out.svg");
+
+    const call = cp.__execFileCalls.find((c) => c.cmd === "powershell.exe");
+    expect(call).toBeDefined();
+    const encoded = call!.args[call!.args.indexOf("-EncodedCommand") + 1];
+    const ps = decodePS(encoded);
+    expect(ps).toContain("System.Windows.Forms.SaveFileDialog");
+    expect(ps).toContain('"out.svg"');
+    expect(ps).toContain("OverwritePrompt");
+  });
+
+  it("chooseSavePath returns null when the user cancels (empty stdout)", async () => {
+    const { chooseSavePath } = await import("../.pi/extensions/generative-ui/platform/win32.js");
+    const cp = await loadCpMock();
+
+    cp.__setExecFileResult({ stdout: "\r\n" });
+    expect(await chooseSavePath("out.svg")).toBeNull();
+  });
+
+  it("respects GLIMPSE_PS_PATH override", async () => {
+    const { copyText } = await import("../.pi/extensions/generative-ui/platform/win32.js");
+    const cp = await loadCpMock();
+    const prev = process.env.GLIMPSE_PS_PATH;
+    process.env.GLIMPSE_PS_PATH = "C:\\pwsh\\pwsh.exe";
+    try {
+      await copyText("x");
+      expect(cp.__execFileCalls.find((c) => c.cmd === "C:\\pwsh\\pwsh.exe")).toBeDefined();
+    } finally {
+      if (prev === undefined) delete process.env.GLIMPSE_PS_PATH;
+      else process.env.GLIMPSE_PS_PATH = prev;
+    }
   });
 });
 

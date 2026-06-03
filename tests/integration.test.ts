@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Opener } from "../.pi/extensions/generative-ui/glimpse-window.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GLIMPSE_MJS    = join(__dirname, "..", "node_modules", "glimpseui", "src", "glimpse.mjs");
@@ -17,9 +18,9 @@ const describeMaybe = shouldSkip ? describe.skip : describe;
 describeMaybe("integration: real glimpse window", () => {
   it("opens a window, streams content, and receives a user message", async () => {
     const { WidgetSession } = await import("../.pi/extensions/generative-ui/session.js");
-    const { open } = await import(GLIMPSE_MJS);
+    const { open } = await import(GLIMPSE_MJS) as { open: Opener };
 
-    const session = new WidgetSession(open as never, {
+    const session = new WidgetSession(open, {
       title: "integration-test",
       width: 320,
       height: 200,
@@ -51,9 +52,9 @@ describeMaybe("integration: real glimpse window", () => {
     // the result rides back as an rpc-result, and the page reports outcome via
     // glimpse.send.
     const { WidgetSession } = await import("../.pi/extensions/generative-ui/session.js");
-    const { open } = await import(GLIMPSE_MJS);
+    const { open } = await import(GLIMPSE_MJS) as { open: Opener };
 
-    const session = new WidgetSession(open as never, {
+    const session = new WidgetSession(open, {
       title: "rpc-test", width: 320, height: 200, hidden: true,
     });
 

@@ -99,7 +99,7 @@ export function install(): void {
   trigger.setAttribute("aria-label", "SVG actions");
   trigger.style.cssText =
     `width:${TRIGGER_SIZE}px;height:${TRIGGER_SIZE}px;border:0;border-radius:7px;background:#262624;` +
-    "display:flex;align-items:center;justify-content:center;gap:3px;cursor:default;padding:0;" +
+    "display:flex;align-items:center;justify-content:center;gap:3px;cursor:pointer;padding:0;" +
     "transition:background .16s ease;";
   Array.from(trigger.children).forEach((dot) => {
     (dot as HTMLElement).style.cssText = "width:3.5px;height:3.5px;border-radius:50%;background:#c8c5bd;display:block;";

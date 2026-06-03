@@ -4,7 +4,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getGuidelines, AVAILABLE_MODULES } from "./guidelines.js";
+import { getGuidelines, AVAILABLE_MODULES, type Module } from "./guidelines.js";
 import { WidgetSession } from "./session.js";
 import type { Opener } from "./glimpse-window.js";
 
@@ -95,20 +95,20 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       modules: Type.Array(
-        StringEnum(AVAILABLE_MODULES as readonly string[]),
+        StringEnum(AVAILABLE_MODULES),
         { description: "Which module(s) to load. Pick all that fit." },
       ),
     }),
 
     async execute(_id, params) {
-      const content = getGuidelines(params.modules as string[]);
+      const content = getGuidelines(params.modules as readonly Module[]);
       return {
         content: [{ type: "text" as const, text: content }],
         details: { modules: params.modules },
       };
     },
 
-    renderCall(args: { modules?: string[] }, theme) {
+    renderCall(args: { modules?: readonly string[] }, theme) {
       const mods = (args.modules ?? []).join(", ");
       return new Text(theme.fg("toolTitle", theme.bold("read_me ")) + theme.fg("muted", mods), 0, 0);
     },
