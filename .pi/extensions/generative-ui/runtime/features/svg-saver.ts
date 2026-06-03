@@ -1,20 +1,26 @@
-import { rpc } from "../bridge.js";
+import { rpc, on } from "../bridge.js";
 
 /**
  * SVG saver — when the user hovers over any <svg> in the page, show a
  * floating menu with "Copy to clipboard" / "Download file" options.
  * Both call into the host via RPC methods `svg.copy` and `svg.save`.
  *
- * The page is only responsible for: detecting hover, serializing the SVG,
- * and presenting feedback. The host owns the OS dialogs and file IO.
+ * The page owns the menu and the SVG serialization; the host owns the OS
+ * dialogs and file IO. The menu is inert until the bridge delivers the
+ * `final` chunk — the feature listens for that itself; no globals.
  */
 
 const HIDE_DELAY_MS = 450;
+const MENU_TRANSIT_MS = 120;
+const POST_ACTION_DISMISS_MS = 900;
 const RESTORE_LABEL_MS = 1200;
 const TRIGGER_SIZE = 28;
 const TRIGGER_INSET = 8;
 
 interface MenuItem { item: HTMLButtonElement; label: HTMLSpanElement; }
+
+const COPY_LABEL = "Copy to clipboard";
+const SAVE_LABEL = "Download file";
 
 function menuItem(iconSVG: string, text: string): MenuItem {
   const item = document.createElement("button");
@@ -41,15 +47,13 @@ function menuItem(iconSVG: string, text: string): MenuItem {
   return { item, label };
 }
 
-function filenameFor(svg: SVGElement): string {
+/** Pick a human-friendly suggestion. Host re-sanitizes — this is just a hint. */
+function suggestName(svg: SVGElement): string {
   const titleNode = svg.querySelector("title");
-  const candidate =
-    svg.getAttribute("aria-label") ||
-    (titleNode && titleNode.textContent) ||
-    document.title ||
-    "diagram";
-  const slug = candidate.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  return (slug || "diagram") + ".svg";
+  return svg.getAttribute("aria-label")
+    || (titleNode && titleNode.textContent)
+    || document.title
+    || "diagram";
 }
 
 function collectStyles(): string {
@@ -79,7 +83,9 @@ function serialize(svg: SVGElement): string {
 
 export function install(): void {
   let activeSvg: SVGElement | null = null;
-  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  let triggerHideTimer: ReturnType<typeof setTimeout> | null = null;
+  let menuHideTimer: ReturnType<typeof setTimeout> | null = null;
+  let restoreTimer: ReturnType<typeof setTimeout> | null = null;
   let pending = false;
   let exportReady = false;
 
@@ -107,13 +113,13 @@ export function install(): void {
   const copy = menuItem(
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">' +
     '<rect x="8" y="8" width="12" height="12" rx="2"/><rect x="4" y="4" width="12" height="12" rx="2"/></svg>',
-    "Copy to clipboard",
+    COPY_LABEL,
   );
   const download = menuItem(
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
     'stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/>' +
     '<path d="M5 20h14"/></svg>',
-    "Download file",
+    SAVE_LABEL,
   );
 
   menu.append(copy.item, download.item);
@@ -131,32 +137,49 @@ export function install(): void {
   }
   setExportReady(false);
 
+  // We become active once the host has pushed the final chunk. Until then
+  // we still show the menu on hover so users see something — but inert.
+  on("content", (msg) => { if (msg.final) setExportReady(true); });
+
+  function restoreLabels(): void {
+    if (restoreTimer) { clearTimeout(restoreTimer); restoreTimer = null; }
+    copy.label.textContent = COPY_LABEL;
+    download.label.textContent = SAVE_LABEL;
+  }
+
+  // Two independent layers:
+  //   - trigger visibility (host display): follows SVG hover
+  //   - menu visibility (dropdown): follows trigger+menu hover, plus explicit
+  //     click/Escape/outside-click. Collapsing the menu doesn't hide the
+  //     trigger; hiding the trigger always collapses the menu first.
+
   function showMenu(): void {
-    if (hideTimer) clearTimeout(hideTimer);
     menu.style.display = "block";
     trigger.style.background = "#141413";
-    trigger.style.outline = "4px solid #8fc5ff";
   }
   function hideMenu(): void {
     menu.style.display = "none";
     trigger.style.background = "#262624";
-    trigger.style.outline = "none";
   }
-  function scheduleHide(): void {
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      hideMenu();
-      host.style.display = "none";
-      activeSvg = null;
-    }, HIDE_DELAY_MS);
+  function hideTrigger(): void {
+    if (triggerHideTimer) { clearTimeout(triggerHideTimer); triggerHideTimer = null; }
+    hideMenu();
+    host.style.display = "none";
+    activeSvg = null;
+  }
+  function scheduleTriggerHide(): void {
+    if (triggerHideTimer) clearTimeout(triggerHideTimer);
+    triggerHideTimer = setTimeout(hideTrigger, HIDE_DELAY_MS);
   }
   function showFor(svg: SVGElement): void {
     activeSvg = svg;
-    if (hideTimer) clearTimeout(hideTimer);
+    if (triggerHideTimer) { clearTimeout(triggerHideTimer); triggerHideTimer = null; }
     const rect = svg.getBoundingClientRect();
     host.style.display = "block";
-    host.style.left =
-      Math.max(TRIGGER_INSET, Math.min(window.innerWidth - TRIGGER_SIZE - TRIGGER_INSET, rect.right - TRIGGER_SIZE - TRIGGER_INSET)) + "px";
+    host.style.left = Math.max(
+      TRIGGER_INSET,
+      Math.min(window.innerWidth - TRIGGER_SIZE - TRIGGER_INSET, rect.right - TRIGGER_SIZE - TRIGGER_INSET),
+    ) + "px";
     host.style.top = Math.max(TRIGGER_INSET, rect.top + TRIGGER_INSET) + "px";
   }
 
@@ -168,43 +191,76 @@ export function install(): void {
     pending = true;
 
     const target = action === "copy" ? copy : download;
-    const original = target.label.textContent;
     target.label.textContent = action === "copy" ? "Copying…" : "Choosing file…";
 
+    let cancelled = false;
     try {
       const payload = serialize(svg as SVGElement);
       if (action === "copy") {
         await rpc("svg.copy", { svg: payload });
         target.label.textContent = "Copied";
       } else {
-        const result = await rpc<{ cancelled?: boolean }>("svg.save", { svg: payload, filename: filenameFor(svg as SVGElement) });
-        target.label.textContent = result?.cancelled ? original : "Saved";
+        const result = await rpc<{ cancelled?: boolean }>("svg.save", {
+          svg: payload,
+          suggestedName: suggestName(svg as SVGElement),
+        });
+        cancelled = !!result?.cancelled;
+        target.label.textContent = cancelled ? SAVE_LABEL : "Saved";
       }
     } catch (err) {
       target.label.textContent = "Failed";
       console.error("[glimpse-ui] svg action failed:", err);
     } finally {
-      setTimeout(() => {
-        copy.label.textContent = "Copy to clipboard";
-        download.label.textContent = "Download file";
-      }, RESTORE_LABEL_MS);
       pending = false;
+      restoreTimer = setTimeout(restoreLabels, RESTORE_LABEL_MS);
+      // Dismiss the menu after the user sees the outcome. Skip the dismiss
+      // on a cancelled save dialog — they're likely about to try again.
+      if (!cancelled) setTimeout(() => { cancelMenuHide(); hideMenu(); }, POST_ACTION_DISMISS_MS);
     }
   }
 
+  // Trigger appears when hovering an SVG.
   document.addEventListener("mouseover", (event) => {
     const target = event.target as Element | null;
     const svg = target?.closest?.("svg");
     if (svg) showFor(svg as SVGElement);
   });
+  // Trigger schedules-hide when leaving an SVG (unless cursor moved into host).
   document.addEventListener("mouseout", (event) => {
     const target = event.target as Element | null;
     const svg = target?.closest?.("svg");
     const related = (event as MouseEvent).relatedTarget as Node | null;
-    if (svg && !svg.contains(related) && !host.contains(related)) scheduleHide();
+    if (svg && !svg.contains(related) && !host.contains(related)) scheduleTriggerHide();
   });
-  host.addEventListener("mouseenter", showMenu);
-  host.addEventListener("mouseleave", scheduleHide);
+  // The menu is position:absolute, so the trigger and menu have a small
+  // visual gap (and separate hit areas). Hovering either keeps the menu
+  // open; leaving both for MENU_TRANSIT_MS closes it. The transit timer
+  // is independent of the SVG-hover trigger timer.
+  function cancelMenuHide(): void {
+    if (menuHideTimer) { clearTimeout(menuHideTimer); menuHideTimer = null; }
+  }
+  function scheduleMenuHide(): void {
+    cancelMenuHide();
+    menuHideTimer = setTimeout(hideMenu, MENU_TRANSIT_MS);
+  }
+  function keepAlive(): void {
+    cancelMenuHide();
+    if (triggerHideTimer) { clearTimeout(triggerHideTimer); triggerHideTimer = null; }
+  }
+
+  trigger.addEventListener("mouseenter", () => { keepAlive(); showMenu(); });
+  trigger.addEventListener("mouseleave", scheduleMenuHide);
+  menu.addEventListener("mouseenter", keepAlive);
+  menu.addEventListener("mouseleave", scheduleMenuHide);
+
+  // Clicking the trigger toggles the menu. Hover opens it too, but a click
+  // gives keyboard / touchpad users a deterministic way to dismiss it.
+  trigger.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (menu.style.display === "block") hideMenu();
+    else showMenu();
+  });
 
   copy.item.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); void dispatch("copy"); });
   download.item.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); void dispatch("download"); });
@@ -212,7 +268,22 @@ export function install(): void {
   window.addEventListener("scroll", () => { if (activeSvg) showFor(activeSvg); }, true);
   window.addEventListener("resize", () => { if (activeSvg) showFor(activeSvg); });
 
-  // The host marks us ready by sending a `content` with `final: true`. Until
-  // then, the menu is visible but inert. Wire this from the runtime entry.
-  (window as unknown as { __glimpseUiSvgSetReady?: (r: boolean) => void }).__glimpseUiSvgSetReady = setExportReady;
+  // Click anywhere outside the menu+trigger dismisses the menu. Trigger
+  // stays if the cursor is still over an SVG. Capture phase so this runs
+  // before any in-widget click handlers.
+  document.addEventListener("pointerdown", (event) => {
+    if (menu.style.display === "none") return;
+    const target = event.target as Node | null;
+    if (target && host.contains(target)) return;
+    cancelMenuHide();
+    hideMenu();
+  }, true);
+
+  // Escape collapses the menu.
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && menu.style.display === "block") {
+      cancelMenuHide();
+      hideMenu();
+    }
+  });
 }
