@@ -6,6 +6,9 @@
   "keywords": [
     "pi-package"
   ],
+  "files": [
+    ".pi/"
+  ],
   "pi": {
     "extensions": [
       ".pi/extensions/generative-ui"
