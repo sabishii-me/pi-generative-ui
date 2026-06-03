@@ -11,17 +11,20 @@ import * as win32 from "./win32.js";
  * missing, so the user sees something actionable in the UI.
  */
 
+export type PlatformName = "darwin" | "linux" | "win32" | "unsupported";
+
 export interface Platform {
-  readonly name: "darwin" | "linux" | "win32";
+  readonly name: PlatformName;
   copyText(text: string): Promise<void>;
   chooseSavePath(suggestedName: string): Promise<string | null>;
 }
 
-function unsupported(name: string): Platform {
+function unsupported(): Platform {
+  const reason = `unsupported platform: ${process.platform}`;
   return {
-    name: process.platform as Platform["name"],
-    async copyText() { throw new Error(`Clipboard not supported on ${name}`); },
-    async chooseSavePath() { throw new Error(`Save dialog not supported on ${name}`); },
+    name: "unsupported",
+    async copyText() { throw new Error(`Clipboard ${reason}`); },
+    async chooseSavePath() { throw new Error(`Save dialog ${reason}`); },
   };
 }
 
@@ -33,7 +36,7 @@ export function getPlatform(): Platform {
     case "darwin": cached = darwin; break;
     case "linux":  cached = linux;  break;
     case "win32":  cached = win32;  break;
-    default:       cached = unsupported(process.platform);
+    default:       cached = unsupported();
   }
   return cached;
 }

@@ -4,21 +4,24 @@ import { getPlatform } from "../platform/index.js";
 
 /**
  * Host side of the SVG saver. Registers two RPC methods:
- *   - svg.copy({svg})            → copy SVG text to system clipboard
- *   - svg.save({svg, filename})  → show native Save dialog, write file
+ *   - svg.copy({svg})                 → copy SVG text to system clipboard
+ *   - svg.save({svg, suggestedName?}) → show native Save dialog, write file
  *
- * The client (runtime/features/svg-saver.ts) owns the hover UI; the host
- * just exposes OS capabilities. Errors propagate back to the client as
- * normal RPC rejections, which the menu surfaces as "Failed".
+ * The host is the sole authority on filenames: the client may pass a
+ * human-friendly hint (the SVG's <title>, aria-label, or document.title),
+ * which we sanitize and guarantee a `.svg` extension. The client does no
+ * sanitization of its own.
  */
 
-function safeFilename(name: string): string {
-  const base = name.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "diagram.svg";
-  return base.toLowerCase().endsWith(".svg") ? base : `${base}.svg`;
-}
-
 interface CopyParams { svg: string; }
-interface SaveParams { svg: string; filename?: string; }
+interface SaveParams { svg: string; suggestedName?: string; }
+
+function safeFilename(hint: string | undefined): string {
+  const raw = (hint ?? "diagram").toLowerCase();
+  const slug = raw.replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const base = slug || "diagram";
+  return base.endsWith(".svg") ? base : `${base}.svg`;
+}
 
 export function attach(rpc: RpcHost): void {
   const platform = getPlatform();
@@ -31,9 +34,9 @@ export function attach(rpc: RpcHost): void {
   });
 
   rpc.handle("svg.save", async (params) => {
-    const { svg, filename } = params as SaveParams;
+    const { svg, suggestedName } = params as SaveParams;
     if (typeof svg !== "string") throw new Error("svg.save: missing svg");
-    const path = await platform.chooseSavePath(safeFilename(filename ?? "diagram.svg"));
+    const path = await platform.chooseSavePath(safeFilename(suggestedName));
     if (!path) return { cancelled: true };
     await writeFile(path, svg, "utf8");
     return { path };

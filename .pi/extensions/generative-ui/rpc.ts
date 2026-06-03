@@ -1,14 +1,14 @@
 import type { HostToPage } from "./protocol.js";
 import { isPageToHost } from "./protocol.js";
+import type { GlimpseWindowLike } from "./glimpse-window.js";
 
 /**
- * Host-side RPC handler registry attached to a glimpse window.
+ * Host-side RPC handler registry attached to a Glimpse window.
  *
- * Wraps `win.on("message", …)` and `win.send(js)` so each window has:
- *   - `handle(method, fn)` to register a handler
- *   - `push(msg)`           to send a typed host→page message
- *
- * One handler attaches per window — features just call `register()`.
+ * One `attach(win)` per window installs a single `message` listener that
+ * routes `rpc-call` envelopes to handlers and forwards `user-message`
+ * payloads to registered listeners. Idempotent: a second call returns the
+ * same `RpcHost`.
  */
 
 export type RpcHandler = (params: unknown) => Promise<unknown> | unknown;
@@ -19,25 +19,24 @@ export interface RpcHost {
   onUserMessage(fn: (data: unknown) => void): void;
 }
 
-interface GlimpseWindowLike {
-  send(js: string): void;
-  on(event: "message", fn: (data: unknown) => void): void;
-}
+const installed = new WeakMap<GlimpseWindowLike, RpcHost>();
 
-const installed = new WeakMap<object, RpcHost>();
-
+/**
+ * Encode a value for safe embedding in `webView.evaluateJavaScript(...)`.
+ *
+ * The host calls `win.send("window.__glimpseUI.deliver(<this>)")` — the
+ * argument is evaluated as JavaScript, not parsed as HTML, so we only need
+ * JSON-safety plus one defense: `</script>` would break callers that ever
+ * splice this into an HTML script context. JSON.stringify already escapes
+ * everything else; we just neutralize the closing tag with a unicode escape
+ * so the resulting JS string still decodes to the same value.
+ */
 function jsLiteral(value: unknown): string {
-  // JSON.stringify escapes for JSON; we additionally escape `</script>` to be
-  // safe even though this is sent via stdin to webView.evaluateJavaScript,
-  // not embedded in HTML.
-  const s = JSON.stringify(value);
-  // Belt-and-suspenders: <!-- and </script> can break inline script contexts
-  // if this is ever spliced into HTML. Cheap to neutralize.
-  return s.replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--");
+  return JSON.stringify(value).replace(/<\/script/gi, "\\u003C/script");
 }
 
 export function attach(win: GlimpseWindowLike): RpcHost {
-  const existing = installed.get(win as unknown as object);
+  const existing = installed.get(win);
   if (existing) return existing;
 
   const handlers = new Map<string, RpcHandler>();
@@ -65,23 +64,22 @@ export function attach(win: GlimpseWindowLike): RpcHost {
       return;
     }
 
-    if (raw.type === "rpc-call") {
-      const handler = handlers.get(raw.method);
-      if (!handler) {
-        push({ type: "rpc-result", id: raw.id, ok: false, error: `Unknown RPC method: ${raw.method}` });
-        return;
-      }
-      try {
-        const value = await handler(raw.params);
-        push({ type: "rpc-result", id: raw.id, ok: true, value });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        push({ type: "rpc-result", id: raw.id, ok: false, error: message });
-      }
+    // raw.type === "rpc-call"
+    const handler = handlers.get(raw.method);
+    if (!handler) {
+      push({ type: "rpc-result", id: raw.id, ok: false, error: `Unknown RPC method: ${raw.method}` });
+      return;
+    }
+    try {
+      const value = await handler(raw.params);
+      push({ type: "rpc-result", id: raw.id, ok: true, value });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      push({ type: "rpc-result", id: raw.id, ok: false, error: message });
     }
   });
 
   const host: RpcHost = { handle, push, onUserMessage };
-  installed.set(win as unknown as object, host);
+  installed.set(win, host);
   return host;
 }

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { GlimpseWindowLike } from "../.pi/extensions/generative-ui/glimpse-window.js";
 
 /**
  * In-memory stand-in for a glimpse window. Captures every `send(js)` call
@@ -11,17 +12,11 @@ import { EventEmitter } from "node:events";
  * We don't run that JS — we just parse the JSON back out so tests can
  * assert on the structured payload directly.
  */
-export class FakeWindow extends EventEmitter {
+export class FakeWindow extends EventEmitter implements GlimpseWindowLike {
   readonly sent: string[] = [];
   closed = false;
 
-  send(js: string): void {
-    this.sent.push(js);
-  }
-
-  setHTML(_html: string): void {
-    // no-op for tests; the runtime is not actually executed
-  }
+  send(js: string): void { this.sent.push(js); }
 
   close(): void {
     if (this.closed) return;

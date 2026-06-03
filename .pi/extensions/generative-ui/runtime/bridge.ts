@@ -4,26 +4,30 @@ import { isHostToPage, isPageToHost } from "../protocol.js";
 /**
  * The bridge owns both directions of the host↔page channel.
  *
- *  - host → page lands via window.__glimpseUI.deliver(msg) (eval'd by host)
- *  - page → host goes through window.glimpse.send(json) (native bridge)
+ *  - host → page lands via `window.__glimpseUI.deliver(msg)` (eval'd by host)
+ *  - page → host goes through `window.glimpse.send(json)` (native bridge)
  *
  * Listeners subscribe by message type. RPC adds a small request/response
- * layer on top.
+ * layer on top. Widget code can call `window.__glimpseUI.rpc(method, params)`
+ * directly for custom features.
  */
 
 type Handler<T extends HostToPage["type"]> = (msg: Extract<HostToPage, { type: T }>) => void;
 type AnyHandler = (msg: HostToPage) => void;
 
-type GlimpseGlobal = {
-  send: (data: unknown) => void;
-};
+type GlimpseGlobal = { send: (data: unknown) => void };
 
 declare global {
   interface Window {
     glimpse?: GlimpseGlobal;
-    __glimpseUI?: { deliver: (msg: unknown) => void };
+    __glimpseUI?: {
+      deliver: (msg: unknown) => void;
+      rpc: <T = unknown>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>;
+    };
   }
 }
+
+const RPC_DEFAULT_TIMEOUT_MS = 30_000;
 
 const handlers = new Map<string, Set<AnyHandler>>();
 
@@ -44,10 +48,11 @@ export function on<T extends HostToPage["type"]>(type: T, fn: Handler<T>): () =>
   return () => { bucket!.delete(wrapped); };
 }
 
-// The original native send, captured before we wrap it.
+// ── page → host ─────────────────────────────────────────────────────────
+
 let nativeSend: ((data: unknown) => void) | null = null;
 
-export function send(msg: PageToHost): void {
+function send(msg: PageToHost): void {
   if (!nativeSend) {
     console.warn("[glimpse-ui] native send unavailable");
     return;
@@ -56,9 +61,9 @@ export function send(msg: PageToHost): void {
 }
 
 /**
- * Wrap window.glimpse.send so that user code calling glimpse.send({...})
- * (without our envelope) gets wrapped as a `user-message`. Anything that
- * already conforms to PageToHost passes through.
+ * Wrap window.glimpse.send so user code calling glimpse.send({...}) without
+ * our envelope gets wrapped as a `user-message`. Anything that already
+ * conforms to PageToHost passes through.
  */
 function wrapGlimpse(): void {
   const g = window.glimpse;
@@ -73,9 +78,14 @@ function wrapGlimpse(): void {
   };
 }
 
-// ── RPC (page → host) ────────────────────────────────────────────────────
+// ── RPC (page → host) ───────────────────────────────────────────────────
 
-interface Pending { resolve: (v: unknown) => void; reject: (err: Error) => void; }
+interface Pending {
+  resolve: (v: unknown) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 const pending = new Map<string, Pending>();
 let nextId = 0;
 
@@ -83,20 +93,26 @@ on("rpc-result", (msg) => {
   const p = pending.get(msg.id);
   if (!p) return;
   pending.delete(msg.id);
+  clearTimeout(p.timer);
   if (msg.ok) p.resolve(msg.value);
   else p.reject(new Error(msg.error));
 });
 
-export function rpc<T = unknown>(method: string, params: unknown = null): Promise<T> {
+export function rpc<T = unknown>(method: string, params: unknown = null, timeoutMs = RPC_DEFAULT_TIMEOUT_MS): Promise<T> {
   const id = `r${++nextId}`;
   return new Promise<T>((resolve, reject) => {
-    pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+    const timer = setTimeout(() => {
+      if (!pending.has(id)) return;
+      pending.delete(id);
+      reject(new Error(`RPC ${method} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
     send({ type: "rpc-call", id, method, params });
   });
 }
 
-// Install the deliver hook on window so the host can call into us.
+/** Install the host→page deliver hook and the public widget API. */
 export function install(): void {
-  window.__glimpseUI = { deliver };
+  window.__glimpseUI = { deliver, rpc };
   wrapGlimpse();
 }

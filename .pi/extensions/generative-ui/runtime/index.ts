@@ -5,10 +5,11 @@ import { install as installSvgSaver } from "./features/svg-saver.js";
 /**
  * Runtime entry — runs once inside the webview at document load.
  *
- *   - Installs the host→page deliver hook (so eval'd messages route here)
- *   - Subscribes to `content` messages and morphs #root accordingly
- *   - On the final chunk, executes <script> tags and unlocks features
- *   - Installs feature modules (svg saver, …)
+ *   - Install the host→page deliver hook (so eval'd messages route here).
+ *   - Subscribe to `content` messages and morph #root accordingly.
+ *   - On the final chunk, execute <script> tags.
+ *   - Mount feature modules. Each feature subscribes to whatever bridge
+ *     events it cares about — the entry knows nothing about them.
  */
 
 function boot(): void {
@@ -20,6 +21,8 @@ function boot(): void {
     return;
   }
 
+  // The bundle is inlined at end of <body>, so by the time we run, the
+  // parser has built #root and we can morph immediately. Guard anyway.
   let queued: { html: string; final: boolean } | null = null;
   let domReady = document.readyState !== "loading";
 
@@ -28,12 +31,7 @@ function boot(): void {
     const { html, final } = queued;
     queued = null;
     applyHTML(root!, html);
-    if (final) {
-      runScripts(root!);
-      // Unlock features that should only act on finished content.
-      const setReady = (window as unknown as { __glimpseUiSvgSetReady?: (r: boolean) => void }).__glimpseUiSvgSetReady;
-      setReady?.(true);
-    }
+    if (final) runScripts(root!);
   }
 
   on("content", (msg) => {
@@ -45,10 +43,9 @@ function boot(): void {
     document.addEventListener("DOMContentLoaded", () => {
       domReady = true;
       flushQueued();
-    });
+    }, { once: true });
   }
 
-  // Features
   installSvgSaver();
 }
 

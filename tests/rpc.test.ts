@@ -87,12 +87,16 @@ describe("rpc.attach", () => {
     expect(a).toBe(b);
   });
 
-  it("push() escapes </script> in JSON to neutralize HTML splicing", () => {
+  it("push() escapes </script> as a unicode literal so the eval'd JS still decodes correctly", () => {
     const win = new FakeWindow();
     const rpc = attach(win);
-    rpc.push({ type: "content", html: "<p>x</p></script><script>alert(1)</script>", final: false });
+    const html = "<p>x</p></script><script>alert(1)</script>";
+    rpc.push({ type: "content", html, final: false });
     const js = win.sent[0];
-    expect(js).not.toContain("</script>");
-    expect(js).toContain("<\\/script>");
+    // No literal closing tag left in the eval'd source
+    expect(js).not.toMatch(/<\/script/i);
+    // But once eval'd, the JSON decodes back to the original payload
+    const decoded = win.parseDelivered() as { type: string; html: string };
+    expect(decoded).toEqual({ type: "content", html, final: false });
   });
 });

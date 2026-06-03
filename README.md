@@ -2,7 +2,9 @@
 
 Claude.ai's generative UI - reverse-engineered, rebuilt for [pi](https://github.com/badlogic/pi-mono).
 
-Ask pi to "show me how compound interest works" and get a live interactive widget - sliders, charts, animations - rendered in a native macOS window. Not a screenshot. Not a code block. A real HTML application with JavaScript, streaming live as the LLM generates it.
+Ask pi to "show me how compound interest works" and get a live interactive widget - sliders, charts, animations - rendered in a native window. Not a screenshot. Not a code block. A real HTML application with JavaScript, streaming live as the LLM generates it.
+
+Runs on macOS, Linux, and Windows via [Glimpse](https://github.com/hazat/glimpse) 0.8+.
 
 <img src="media/dashboard.gif" width="32%"> <img src="media/simulator.gif" width="32%"> <img src="media/diagram.gif" width="32%">
 
@@ -14,11 +16,12 @@ This extension replicates that system for pi:
 
 1. **LLM calls `visualize_read_me`** - loads design guidelines (lazy, only the relevant modules)
 2. **LLM calls `show_widget`** - generates an HTML fragment as a tool call parameter
-3. **Extension intercepts the stream** - opens a native macOS window via [Glimpse](https://github.com/hazat/glimpse) and feeds partial HTML as tokens arrive
+3. **Extension intercepts the stream** - opens a native window via [Glimpse](https://github.com/hazat/glimpse) and feeds partial HTML as tokens arrive
 4. **[morphdom](https://github.com/patrick-steele-idem/morphdom) diffs the DOM** - new elements fade in smoothly, unchanged elements stay untouched
 5. **Scripts execute on completion** - Chart.js, D3, Three.js, anything from CDN
+6. **Hover any `<svg>` for export** - built-in floating menu copies SVG to clipboard or saves it via the native Save dialog
 
-The widget window has full browser capabilities (WKWebView) and a bidirectional bridge - `window.glimpse.send(data)` sends data back to the agent.
+The widget window has full browser capabilities and a bidirectional bridge - `window.glimpse.send(data)` sends data back to the agent. Widgets can also call typed RPC methods via `window.__glimpseUI.rpc(method, params)`.
 
 ## Install
 
@@ -26,7 +29,11 @@ The widget window has full browser capabilities (WKWebView) and a bidirectional 
 pi install git:github.com/Michaelliv/pi-generative-ui
 ```
 
-> macOS only. Requires Swift toolchain (ships with Xcode or Xcode Command Line Tools).
+> Cross-platform — Glimpse 0.8 compiles a tiny native binary on `postinstall`:
+>
+> - **macOS** — Xcode Command Line Tools (`xcode-select --install`)
+> - **Linux** — Rust + GTK4/WebKitGTK dev packages, or just use the Chromium fallback (any Chromium-based browser)
+> - **Windows** — .NET 8 SDK + WebView2 Runtime
 
 ## Usage
 
@@ -61,21 +68,23 @@ Five modules, loaded on demand:
 
 ### Streaming architecture
 
-The extension intercepts pi's streaming events (`toolcall_start` / `toolcall_delta` / `toolcall_end`) to render the widget live as tokens arrive:
+The extension intercepts pi's streaming events (`toolcall_start` / `toolcall_delta` / `toolcall_end`). A `WidgetSession` owns one Glimpse window from creation through user interaction:
 
 ```
-toolcall_start    → initialize streaming state
-toolcall_delta    → debounce 150ms, open window, morphdom diff
-toolcall_end      → final diff + execute <script> tags
-execute()         → reuse window, wait for interaction or close
+toolcall_start    → new WidgetSession(open, {title, width, height})
+toolcall_delta    → session.onChunk(html)        # debounced 150ms
+toolcall_end      → session.onComplete(html)     # final + run scripts
+execute()         → session.awaitInteraction()   # races user message / closed / error / abort / timeout
 ```
+
+The page-side runtime is a real TypeScript module bundled by esbuild into a single IIFE inlined into the shell HTML. It speaks a typed JSON protocol with the host: `{type: "content", html, final}` host→page, `{type: "user-message" | "rpc-call", ...}` page→host. No `escapeJS`, no eval-strings-as-business-logic.
 
 Key details:
-- **Shell HTML + JS eval** - window opens with an empty shell; content injected via `win.send()`, not `setHTML()`, to avoid full-page flashes
-- **morphdom DOM diffing** - only changed nodes update; new nodes get a 0.3s fade-in animation
-- **pi-ai's `parseStreamingJson`** - no need for a partial JSON parser; pi already provides parsed `arguments` on every delta
-- **150ms debounce** - batches rapid token updates for smooth visual rendering
-- **Dark mode by default** - `#1a1a1a` background, designed for macOS WKWebView
+- **One source of truth per concern** — protocol types in `protocol.ts`, window shape in `glimpse-window.ts`, OS bindings in `platform/{darwin,linux,win32}.ts`
+- **Typed RPC** — features register `{name, handler}` once; widget code calls `window.__glimpseUI.rpc(method, params)` with a 30s default timeout
+- **morphdom DOM diffing** — only changed nodes update; new nodes get a 0.3s fade-in animation; scripts run exactly once on the final chunk
+- **150ms debounce** — batches rapid token updates for smooth visual rendering
+- **Dark mode by default** — `#1a1a1a` background
 
 ### Glimpse
 
@@ -88,17 +97,27 @@ The Swift source compiles automatically on `npm install` via `postinstall`.
 ```
 pi-generative-ui/
 ├── .pi/extensions/generative-ui/
-│   ├── index.ts              # Extension: tools, streaming, Glimpse integration
-│   ├── guidelines.ts         # 72K of verbatim claude.ai design guidelines
-│   └── claude-guidelines/    # Raw extracted markdown (reference)
-│       ├── art.md
-│       ├── chart.md
-│       ├── diagram.md
-│       ├── interactive.md
-│       ├── mockup.md
-│       └── sections/         # Deduplicated sections
-└── package.json              # pi-package manifest
+│   ├── index.ts                 # Tool registration; streaming → session handoff
+│   ├── session.ts               # WidgetSession — owns one window for its lifetime
+│   ├── rpc.ts                   # Host-side RPC: routes rpc-call, forwards user-message
+│   ├── protocol.ts              # Shared discriminated-union message types
+│   ├── glimpse-window.ts        # Structural type for a Glimpse window
+│   ├── features/svg-saver.ts    # svg.copy / svg.save RPC handlers
+│   ├── platform/{darwin,linux,win32}.ts  # OS clipboard + save-dialog shims
+│   ├── runtime/                 # Page-side TypeScript (bundled by build.mjs)
+│   │   ├── index.ts             #   Boot: bridge + morph loop + features
+│   │   ├── bridge.ts            #   Host↔page channel + RPC layer
+│   │   ├── morph.ts             #   morphdom + runScripts
+│   │   └── features/svg-saver.ts#   Hover menu UI
+│   ├── runtime.bundle.ts        # AUTO-GENERATED: shell HTML + IIFE'd runtime
+│   ├── build.mjs                # esbuild step → runtime.bundle.ts
+│   ├── guidelines.ts            # 72K of verbatim claude.ai design guidelines
+│   └── claude-guidelines/       # Raw extracted markdown (reference)
+├── tests/                       # protocol + rpc + session + platform + integration
+└── package.json                 # pi-package manifest
 ```
+
+Rebuild the page-side bundle with `npm run build:runtime` after editing anything under `runtime/`. The bundle is committed so end users don't need a build step.
 
 ## How the guidelines were extracted
 

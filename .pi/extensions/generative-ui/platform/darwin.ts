@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -18,12 +17,12 @@ export async function copyText(text: string): Promise<void> {
 export async function chooseSavePath(suggestedName: string): Promise<string | null> {
   const script = [
     `set defaultName to ${JSON.stringify(suggestedName)}`,
-    'try',
+    "try",
     '  set chosenFile to choose file name with prompt "Save as:" default name defaultName',
-    '  return POSIX path of chosenFile',
-    'on error number -128',
+    "  return POSIX path of chosenFile",
+    "on error number -128",
     '  return ""',
-    'end try',
+    "end try",
   ].join("\n");
   const { stdout } = await execFileAsync("osascript", ["-e", script]);
   const path = stdout.trim();

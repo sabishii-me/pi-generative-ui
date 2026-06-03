@@ -1,16 +1,17 @@
 import { attach as attachRpc, type RpcHost } from "./rpc.js";
 import { attach as attachSvgSaver } from "./features/svg-saver.js";
 import { RUNTIME_HTML } from "./runtime.bundle.js";
+import type { GlimpseWindowLike, OpenOptions, Opener } from "./glimpse-window.js";
 
 /**
- * Owns one glimpse window for the lifetime of a show_widget call.
+ * Owns one Glimpse window for the lifetime of a show_widget call.
  *
  *   - `onChunk(html)` is called repeatedly while the model streams.
  *   - `onComplete(html)` is called when the tool call finishes — final
  *     content is pushed with `final: true` and scripts execute.
  *   - `awaitInteraction()` resolves when the user sends a message, the
  *     window closes, an error fires, the signal aborts, or the timeout
- *     hits — whichever comes first.
+ *     hits — whichever wins. Call once per session.
  *
  * The page receives `{type: "content", html, final}` messages; nothing
  * else. Features are attached once on open() and live until close.
@@ -20,24 +21,7 @@ const FLUSH_DEBOUNCE_MS = 150;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MIN_CHUNK_BYTES = 20;
 
-export interface OpenOptions {
-  title: string;
-  width: number;
-  height: number;
-  floating?: boolean;
-}
-
-interface GlimpseWindowLike {
-  send(js: string): void;
-  setHTML(html: string): void;
-  close(): void;
-  on(event: "ready",   fn: () => void): void;
-  on(event: "message", fn: (data: unknown) => void): void;
-  on(event: "closed",  fn: () => void): void;
-  on(event: "error",   fn: (err: Error) => void): void;
-}
-
-type Opener = (html: string, opts: { width: number; height: number; title: string; floating?: boolean }) => GlimpseWindowLike;
+export type { OpenOptions, Opener } from "./glimpse-window.js";
 
 export class WidgetSession {
   readonly win: GlimpseWindowLike;
@@ -48,9 +32,12 @@ export class WidgetSession {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private finalized = false;
   private closed = false;
+  private interactionStarted = false;
 
   constructor(open: Opener, opts: OpenOptions) {
     this.win = open(RUNTIME_HTML, opts);
+    this.win.on("closed", () => { this.closed = true; });
+    this.win.on("error",  () => { this.closed = true; });
 
     this.readyPromise = new Promise<void>((resolve) => {
       this.win.on("ready", () => resolve());
@@ -90,39 +77,54 @@ export class WidgetSession {
     if (!this.hasContent) return;
     await this.readyPromise;
     if (this.closed) return;
-    this.rpc.push({ type: "content", html: this.latestHTML, final });
-  }
-
-  onUserMessage(fn: (data: unknown) => void): void {
-    this.rpc.onUserMessage(fn);
+    try {
+      this.rpc.push({ type: "content", html: this.latestHTML, final });
+    } catch (err) {
+      console.error("[glimpse-ui] push failed:", err);
+    }
   }
 
   /**
    * Resolves with the reason this session ended. Multiple terminators race;
-   * the first one wins.
+   * the first wins, the rest are dropped. Must be called at most once.
    */
   awaitInteraction(signal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<SessionResult> {
+    if (this.interactionStarted) {
+      throw new Error("awaitInteraction() may only be called once per session");
+    }
+    this.interactionStarted = true;
+
     return new Promise<SessionResult>((resolve) => {
       let done = false;
-      const finish = (result: SessionResult) => {
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      let abortHandler: (() => void) | null = null;
+
+      const finish = (result: SessionResult): void => {
         if (done) return;
         done = true;
+        if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
+        if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
         resolve(result);
       };
 
       this.rpc.onUserMessage((data) => finish({ kind: "message", data }));
-      this.win.on("closed", () => { this.closed = true; finish({ kind: "closed" }); });
-      this.win.on("error", (err) => finish({ kind: "error", error: err }));
+      this.win.on("closed", () => finish({ kind: "closed" }));
+      this.win.on("error",  (err) => finish({ kind: "error", error: err }));
 
       if (signal) {
-        if (signal.aborted) { try { this.win.close(); } catch {} finish({ kind: "aborted" }); return; }
-        signal.addEventListener("abort", () => {
+        if (signal.aborted) {
           try { this.win.close(); } catch {}
           finish({ kind: "aborted" });
-        }, { once: true });
+          return;
+        }
+        abortHandler = () => {
+          try { this.win.close(); } catch {}
+          finish({ kind: "aborted" });
+        };
+        signal.addEventListener("abort", abortHandler, { once: true });
       }
 
-      setTimeout(() => finish({ kind: "timeout" }), timeoutMs);
+      timeoutHandle = setTimeout(() => finish({ kind: "timeout" }), timeoutMs);
     });
   }
 

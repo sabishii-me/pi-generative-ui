@@ -6,27 +6,33 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getGuidelines, AVAILABLE_MODULES } from "./guidelines.js";
 import { WidgetSession } from "./session.js";
+import type { Opener } from "./glimpse-window.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GLIMPSE_PATH = join(__dirname, "../../../node_modules/glimpseui/src/glimpse.mjs");
 
 export default function (pi: ExtensionAPI) {
   const activeSessions = new Set<WidgetSession>();
-  let glimpseModule: { open: (html: string, opts: unknown) => unknown } | null = null;
+  let openCache: Opener | null = null;
 
-  async function getGlimpseOpen() {
-    if (!glimpseModule) glimpseModule = await import(GLIMPSE_PATH);
-    return glimpseModule!.open;
+  async function getOpen(): Promise<Opener> {
+    if (!openCache) {
+      const mod = await import(GLIMPSE_PATH) as { open: Opener };
+      openCache = mod.open;
+    }
+    return openCache;
   }
 
   // ── Streaming bridge ───────────────────────────────────────────────────
   //
   // While show_widget streams, we want the user to see partial content
-  // before the tool call finishes. `pending` holds the session created on
-  // `toolcall_start`; `execute()` later picks it up by content index.
+  // before the tool call finishes. The session is created on toolcall_start
+  // and `execute()` later picks it up by content index.
 
-  interface Pending { contentIndex: number; session: WidgetSession; }
-  let pending: Pending | null = null;
+  let pendingIndex: number | null = null;
+  let pendingSession: WidgetSession | null = null;
+
+  function clearPending(): void { pendingIndex = null; pendingSession = null; }
 
   pi.on("message_update", async (event) => {
     const raw = (event as { assistantMessageEvent?: {
@@ -46,24 +52,29 @@ export default function (pi: ExtensionAPI) {
       const width  = typeof args.width  === "number" ? args.width  : 800;
       const height = typeof args.height === "number" ? args.height : 600;
 
-      const open = await getGlimpseOpen();
-      const session = new WidgetSession(open as never, { title, width, height });
-      activeSessions.add(session);
-      pending = { contentIndex: raw.contentIndex, session };
+      try {
+        const open = await getOpen();
+        const session = new WidgetSession(open, { title, width, height });
+        activeSessions.add(session);
+        pendingIndex = raw.contentIndex;
+        pendingSession = session;
+      } catch (err) {
+        console.error("[generative-ui] failed to open streaming window:", err);
+      }
       return;
     }
 
-    if (raw.type === "toolcall_delta" && pending && raw.contentIndex === pending.contentIndex) {
+    if (raw.type === "toolcall_delta" && pendingSession && raw.contentIndex === pendingIndex) {
       const block = raw.partial?.content?.[raw.contentIndex];
       const html = block?.arguments?.widget_code;
-      if (typeof html === "string") pending.session.onChunk(html);
+      if (typeof html === "string") pendingSession.onChunk(html);
       return;
     }
 
-    if (raw.type === "toolcall_end" && pending && raw.contentIndex === pending.contentIndex) {
+    if (raw.type === "toolcall_end" && pendingSession && raw.contentIndex === pendingIndex) {
       const html = raw.toolCall?.arguments?.widget_code;
-      if (typeof html === "string") await pending.session.onComplete(html);
-      // execute() picks up the session
+      if (typeof html === "string") await pendingSession.onComplete(html);
+      // execute() picks up the session via the pending* lets
       return;
     }
   });
@@ -160,16 +171,15 @@ export default function (pi: ExtensionAPI) {
 
       // Reuse the streaming session if present; otherwise open one now.
       let session: WidgetSession;
-      if (pending) {
-        session = pending.session;
-        pending = null;
-        await session.onComplete(code);
+      if (pendingSession) {
+        session = pendingSession;
+        clearPending();
       } else {
-        const open = await getGlimpseOpen();
-        session = new WidgetSession(open as never, { title, width, height, floating: params.floating });
+        const open = await getOpen();
+        session = new WidgetSession(open, { title, width, height, floating: params.floating });
         activeSessions.add(session);
-        await session.onComplete(code);
       }
+      await session.onComplete(code);
 
       const result = await session.awaitInteraction(signal);
       activeSessions.delete(session);
@@ -217,7 +227,7 @@ export default function (pi: ExtensionAPI) {
   // ── shutdown ───────────────────────────────────────────────────────────
 
   pi.on("session_shutdown", async () => {
-    if (pending) { pending.session.close(); pending = null; }
+    if (pendingSession) { pendingSession.close(); clearPending(); }
     for (const s of activeSessions) s.close();
     activeSessions.clear();
   });
