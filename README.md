@@ -26,7 +26,7 @@ The widget window has full browser capabilities. Widgets are display-only from t
 ## Install
 
 ```bash
-pi install git:github.com/Michaelliv/pi-generative-ui
+pi install npm:pi-generative-ui
 ```
 
 > Cross-platform — Glimpse 0.8 compiles a tiny native binary on `postinstall`:
